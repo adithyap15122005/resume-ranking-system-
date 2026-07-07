@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RecruitAI — Resume Ranking System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ── TOP NAVBAR ─────────────────────────────────────────────── -->
+  <nav class="navbar">
+    <div class="navbar-inner">
+
+      <div class="navbar-brand">
+        <div class="brand-logo">R</div>
+        <span class="brand-name">RecruitAI</span>
+      </div>
+
+      <div class="navbar-links" id="navLinks">
+        <a class="nav-link" data-page="home">Home</a>
+        <a class="nav-link" data-page="resumes">Upload Resumes</a>
+        <a class="nav-link" data-page="jobs">Job Description</a>
+        <a class="nav-link" data-page="rankings">Rankings</a>
+        <a class="nav-link" data-page="analytics">Analytics</a>
+        <a class="nav-link" data-page="history">History</a>
+      </div>
+
+      <div class="navbar-status">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">Connecting...</span>
+      </div>
+
+    </div>
+  </nav>
+
+  <!-- ── PAGE CONTENT ───────────────────────────────────────────── -->
+  <main id="app">
+    <div class="page-loading">
+      <div class="spinner"></div>
+    </div>
+  </main>
+
+  <!-- ── TOAST CONTAINER ────────────────────────────────────────── -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
