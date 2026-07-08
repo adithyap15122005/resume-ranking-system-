@@ -1,48 +1,80 @@
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, JSON, String
-from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
+"""Enhanced Ranking Result ORM model with pipeline and explainability."""
+import uuid
+from datetime import datetime, timezone
 
-from backend.database import Base
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.sqlite import JSON
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from backend.core.database import Base
 
 
 class RankingResult(Base):
     __tablename__ = "ranking_results"
 
-    id = Column(Integer, primary_key=True, index=True)
-    job_id = Column(Integer, ForeignKey("job_descriptions.id", ondelete="CASCADE"), nullable=False)
-    resume_id = Column(Integer, ForeignKey("resumes.id", ondelete="CASCADE"), nullable=False)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    organization_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("organizations.id"), nullable=True, index=True
+    )
+    job_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("job_descriptions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    resume_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("resumes.id", ondelete="CASCADE"), nullable=False, index=True
+    )
 
-    rank = Column(Integer, nullable=False)
-    similarity_score = Column(Float, nullable=False)
-    matched_skills = Column(JSON, default=list)
-    missing_skills = Column(JSON, default=list)
-    extra_skills = Column(JSON, default=list)
-    recommendation = Column(String(50))
-    quality_score = Column(Float, default=0.0)
-    keyword_density = Column(Float, default=0.0)
-    experience_years = Column(Float, default=0.0)
+    # ── Score ─────────────────────────────────────────────────────────────────
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    similarity_score: Mapped[float] = mapped_column(Float, nullable=False)
+    semantic_score: Mapped[float] = mapped_column(Float, default=0.0)
+    skill_score: Mapped[float] = mapped_column(Float, default=0.0)
+    experience_score: Mapped[float] = mapped_column(Float, default=0.0)
+    recommendation: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
-    ranked_at = Column(DateTime(timezone=True), server_default=func.now())
+    # ── Skill Analysis ────────────────────────────────────────────────────────
+    matched_skills: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    missing_skills: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    extra_skills: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
-    # Relationships
-    job = relationship("JobDescription", back_populates="rankings")
-    resume = relationship("Resume", back_populates="rankings")
+    # ── Explainability (SHAP) ────────────────────────────────────────────────
+    shap_values: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    skill_contributions: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    experience_contribution: Mapped[float] = mapped_column(Float, default=0.0)
+    education_contribution: Mapped[float] = mapped_column(Float, default=0.0)
+    technical_score: Mapped[float] = mapped_column(Float, default=0.0)
+    hiring_probability: Mapped[float] = mapped_column(Float, default=0.0)
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "job_id": self.job_id,
-            "resume_id": self.resume_id,
-            "rank": self.rank,
-            "similarity_score": self.similarity_score,
-            "matched_skills": self.matched_skills or [],
-            "missing_skills": self.missing_skills or [],
-            "extra_skills": self.extra_skills or [],
-            "recommendation": self.recommendation,
-            "quality_score": self.quality_score,
-            "keyword_density": self.keyword_density,
-            "experience_years": self.experience_years,
-            "ranked_at": self.ranked_at.isoformat() if self.ranked_at else None,
-            "candidate_name": self.resume.candidate_name if self.resume else None,
-            "filename": self.resume.filename if self.resume else None,
-        }
+    # ── Computed Metrics ──────────────────────────────────────────────────────
+    keyword_density: Mapped[float] = mapped_column(Float, default=0.0)
+    experience_years: Mapped[float] = mapped_column(Float, default=0.0)
+    quality_score: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # ── Pipeline / Kanban ─────────────────────────────────────────────────────
+    pipeline_stage: Mapped[str] = mapped_column(String(50), default="applied")
+    is_shortlisted: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_rejected: Mapped[bool] = mapped_column(Boolean, default=False)
+    rejection_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # ── Interview ─────────────────────────────────────────────────────────────
+    interview_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ai_interview_questions: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # ── Offer ─────────────────────────────────────────────────────────────────
+    offer_extended: Mapped[bool] = mapped_column(Boolean, default=False)
+    offer_accepted: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    # ── Recruiter ─────────────────────────────────────────────────────────────
+    recruiter_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # ── Timestamps ────────────────────────────────────────────────────────────
+    ranked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    job: Mapped["JobDescription"] = relationship("JobDescription", back_populates="rankings")  # noqa: F821
+    resume: Mapped["Resume"] = relationship("Resume", back_populates="rankings")  # noqa: F821

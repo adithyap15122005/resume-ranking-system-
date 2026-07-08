@@ -4,22 +4,34 @@ uvicorn[standard]==0.32.1
 python-multipart==0.0.19
 httpx==0.28.1
 
-# ── Frontend ────────────────────────────────────────────────────────────────
-streamlit==1.40.1
-plotly==5.24.1
-matplotlib==3.10.3
-
 # ── Database / ORM ──────────────────────────────────────────────────────────
 sqlalchemy==2.0.36
+aiosqlite==0.20.0          # async SQLite for dev
+asyncpg==0.30.0            # async PostgreSQL for prod
+alembic==1.14.0
+
+# ── Auth & Security ─────────────────────────────────────────────────────────
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.2.0
+
+# ── Pydantic v2 ─────────────────────────────────────────────────────────────
 pydantic==2.10.3
 pydantic-settings==2.6.1
+email-validator==2.2.0
 
-# ── NLP ─────────────────────────────────────────────────────────────────────
+# ── NLP / AI ────────────────────────────────────────────────────────────────
 spacy==3.8.7
 nltk==3.9.1
+sentence-transformers==3.3.1
+
+# ── Vector Search ───────────────────────────────────────────────────────────
+faiss-cpu==1.9.0
 
 # ── Machine Learning ────────────────────────────────────────────────────────
 scikit-learn==1.6.1
+xgboost==2.1.3
+lightgbm==4.5.0
 numpy==2.2.6
 pandas==2.2.3
 joblib==1.4.2
@@ -30,6 +42,13 @@ PyMuPDF==1.25.5
 pdfplumber==0.11.4
 python-docx==1.1.2
 
+# ── Caching / Queue ─────────────────────────────────────────────────────────
+redis==5.2.1
+celery==5.4.0
+
+# ── MLOps ───────────────────────────────────────────────────────────────────
+mlflow==2.18.0
+
 # ── Export ──────────────────────────────────────────────────────────────────
 reportlab==4.2.5
 openpyxl==3.1.5
@@ -38,7 +57,8 @@ fpdf2==2.8.1
 # ── Utilities ───────────────────────────────────────────────────────────────
 aiofiles==24.1.0
 requests==2.32.3
+python-slugify==8.0.4
+boto3==1.35.91             # S3 uploads
 
-# ── Optional: SBERT upgrade (uncomment to enable) ───────────────────────────
-# sentence-transformers==3.3.1
+# ── Optional: GPU-accelerated torch (for SBERT) ─────────────────────────────
 # torch==2.6.0

@@ -55,3 +55,20 @@ Thumbs.db
 # Distribution
 *.whl
 *.tar.gz
+
+# Next.js
+frontend-next/.next/
+frontend-next/node_modules/
+frontend-next/out/
+
+# DB WAL files
+*.db-shm
+*.db-wal
+
+# Uploads content
+uploads/datasets/
+
+# Python cache in tests
+.pytest_cache/
+htmlcov/
+.coverage

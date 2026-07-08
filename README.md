@@ -1,289 +1,159 @@
-# AI-Powered Resume Ranking System
+# HireIQ — Production-Grade AI Hiring Intelligence Platform
 
-An end-to-end recruitment AI that automatically ranks resumes against a job description using TF-IDF, cosine similarity, spaCy NER, and a modular ML pipeline.
-
----
-
-## Quick Start (New Machine)
-
-Follow these steps exactly — takes about 5 minutes.
-
-### Prerequisites
-- Python **3.10, 3.11, or 3.12** (do NOT use 3.13/3.14 — incompatible with some packages)
-- Git
-
-### 1. Clone the repository
-```bash
-git clone https://github.com/YOUR_USERNAME/resume-ranking-system.git
-cd resume-ranking-system
-```
-
-### 2. Create and activate a virtual environment
-```bash
-python -m venv .venv
-
-# Windows
-.venv\Scripts\activate
-
-# macOS / Linux
-source .venv/bin/activate
-```
-
-### 3. Install dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Download the NLP models (one-time setup)
-```bash
-python -m spacy download en_core_web_sm
-python -c "import nltk; nltk.download('stopwords'); nltk.download('wordnet'); nltk.download('punkt'); nltk.download('punkt_tab')"
-```
-
-### 5. Start the backend
-```bash
-uvicorn backend.app:app --reload --host 0.0.0.0 --port 8000
-```
-
-Leave this terminal running.
-
-### 6. Start the frontend (open a second terminal)
-```bash
-# Make sure the venv is activated in this terminal too
-cd frontend/web
-python -m http.server 3000
-```
-
-### 7. Open the app
-Go to **http://localhost:3000** in your browser.
-
-On first run, click **Upload Resumes → Sample Data → Generate Sample Data** to load demo resumes and job descriptions instantly.
+> An end-to-end AI hiring platform that competes with Greenhouse, Lever, and Eightfold AI.  
+> Built for hackathon wins and real-world recruiting teams.
 
 ---
 
-## Project Structure
+## Architecture Overview
 
 ```
 resume-ranking-system/
-├── backend/
-│   ├── app.py                  # FastAPI entry point
-│   ├── config.py               # All settings (env-aware)
-│   ├── database.py             # SQLAlchemy engine + session
-│   ├── models/
-│   │   ├── resume.py           # Resume ORM model
-│   │   ├── job.py              # JobDescription ORM model
-│   │   └── ranking.py         # RankingResult ORM model
-│   ├── schemas/
-│   │   ├── resume.py           # Pydantic request/response schemas
-│   │   ├── job.py
-│   │   └── ranking.py
-│   ├── utils/
-│   │   ├── resume_parser.py    # PDF/DOCX/TXT parser + NER extractor
-│   │   ├── text_cleaner.py     # Lowercase, stopwords, lemmatisation
-│   │   ├── preprocessing.py    # Full NLP pipeline (spaCy + NLTK)
-│   │   ├── feature_extractor.py # TF-IDF with save/load
-│   │   ├── similarity.py       # Abstract SimilarityEngine + TFIDFEngine + SBERTEngine
-│   │   └── ranking_engine.py   # Ranking orchestration + metrics
-│   └── api/
-│       ├── upload.py           # Resume/Job upload endpoints
-│       └── ranking.py          # Rank/Results/History/Evaluate endpoints
-├── frontend/
-│   ├── streamlit_app.py        # Multi-page Streamlit UI
-│   └── components/
-│       ├── charts.py           # Plotly chart builders
-│       └── export.py           # CSV / Excel / PDF export
-├── data/
-│   ├── skills_db.py            # 400+ skills across all domains
-│   ├── sample_generator.py     # 20 synthetic resumes + 5 job descriptions
-│   └── dataset_loader.py       # Kaggle dataset loader + DB importer
-├── uploads/
-│   ├── resumes/                # Uploaded resume files
-│   ├── jobs/                   # Uploaded job description files
-│   └── dataset/                # Kaggle CSV goes here
-├── trained/                    # Saved TF-IDF vectorizers
-├── requirements.txt
-├── Dockerfile
-├── docker-compose.yml
-└── .gitignore
+├── backend/                    # FastAPI async backend
+│   ├── core/
+│   │   ├── config.py           # pydantic-settings v2 Settings
+│   │   ├── database.py         # async SQLAlchemy 2.0
+│   │   └── security.py         # JWT, bcrypt, token helpers
+│   ├── models/                 # SQLAlchemy ORM models
+│   │   ├── user.py             # Users with OAuth, roles
+│   │   ├── organization.py     # Multi-tenant orgs
+│   │   ├── resume.py           # Rich resume with AI scores
+│   │   ├── job.py              # Job descriptions
+│   │   ├── ranking.py          # Ranking results + SHAP
+│   │   └── notification.py     # In-app notifications
+│   ├── api/                    # FastAPI routers
+│   │   ├── auth.py             # JWT auth + OAuth stubs
+│   │   ├── resumes.py          # Upload, parse, search
+│   │   ├── jobs.py             # CRUD + AI ranking trigger
+│   │   ├── analytics.py        # Dashboard stats
+│   │   ├── training.py         # Dataset upload + ML training
+│   │   └── chat.py             # AI assistant with RAG
+│   └── ml/                     # ML pipeline
+│       ├── embeddings.py       # SBERT + FAISS vector search
+│       ├── ranking_engine.py   # Hybrid ranking (50/30/20)
+│       ├── ai_intelligence.py  # Candidate intelligence scores
+│       └── training.py         # Multi-model training pipeline
+├── frontend-next/              # Next.js 14 App Router frontend
+│   └── src/
+│       ├── app/
+│       │   ├── (auth)/         # Login + Signup pages
+│       │   └── (dashboard)/    # All dashboard pages
+│       │       ├── dashboard/  # Analytics overview
+│       │       ├── candidates/ # Resume upload + talent pool
+│       │       ├── jobs/       # Job posting management
+│       │       ├── rankings/   # AI ranking results + SHAP
+│       │       ├── pipeline/   # Kanban drag-and-drop
+│       │       ├── analytics/  # Full analytics suite
+│       │       ├── training/   # Dataset training dashboard
+│       │       ├── assistant/  # AI chat assistant
+│       │       └── settings/   # User + org settings
+│       ├── components/
+│       │   └── layout/         # Sidebar + Topbar
+│       ├── lib/
+│       │   ├── api.ts          # Axios + all API functions
+│       │   └── auth.ts         # Token management
+│       └── store/
+│           └── auth.ts         # Zustand auth store
+├── docker-compose.yml          # Full stack: PG + Redis + Backend + Frontend + MLflow
+├── Dockerfile.backend
+├── .env.example
+└── .github/workflows/ci.yml    # GitHub Actions CI/CD
 ```
 
 ---
 
-## Installation
+## Key Features
 
-### 1. Clone / set up the project
+| Feature | Technology |
+|---------|-----------|
+| **AI Resume Parsing** | spaCy NER, PyMuPDF, python-docx |
+| **Semantic Ranking** | SBERT all-MiniLM-L6-v2 + FAISS |
+| **Hybrid Scoring** | Embedding (50%) + Skills (30%) + Experience (20%) |
+| **Explainable AI** | SHAP-style contribution breakdown per candidate |
+| **Candidate Intelligence** | Leadership/communication/technical/culture-fit scores |
+| **ML Training** | XGBoost, LightGBM, Random Forest, Logistic Regression |
+| **Kanban Pipeline** | Drag-and-drop across 8 hiring stages |
+| **AI Chat Assistant** | Intent-based RAG over resumes + jobs |
+| **Multi-tenant** | Organization isolation on all queries |
+| **Auth** | JWT (access + refresh), roles, email verification |
+
+---
+
+## Quick Start
+
+### 1. Backend (Development)
 
 ```bash
-cd resume-ranking-system
-python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS / Linux
-source .venv/bin/activate
-```
+# Copy env
+cp .env.example .env
 
-### 2. Install dependencies
-
-```bash
+# Install deps
 pip install -r requirements.txt
-```
-
-### 3. Download spaCy model
-
-```bash
 python -m spacy download en_core_web_sm
-```
 
-### 4. Download NLTK data
-
-```bash
-python -c "import nltk; nltk.download('stopwords'); nltk.download('wordnet'); nltk.download('punkt'); nltk.download('punkt_tab')"
-```
-
----
-
-## Running the Application
-
-### Start the backend (FastAPI)
-
-```bash
-uvicorn backend.app:app --reload --host 0.0.0.0 --port 8000
+# Run
+uvicorn backend.app:app --reload --port 8000
 ```
 
 API docs: http://localhost:8000/docs
 
-### Start the frontend (Streamlit)
+### 2. Frontend
 
 ```bash
-streamlit run frontend/streamlit_app.py
+cd frontend-next
+npm install --legacy-peer-deps
+npm run dev
 ```
 
-UI: http://localhost:8501
+Open: http://localhost:3000
 
----
-
-## Using the Kaggle Dataset
-
-1. Download from: https://www.kaggle.com/datasets/snehaanbhawal/resume-dataset
-2. Place the CSV in `uploads/dataset/` (filename: `Resume.csv` or `UpdatedResumeDataSet.csv`)
-3. Import via the API:
+### 3. Full Stack with Docker
 
 ```bash
-python -c "
-from backend.database import SessionLocal, init_db
-from data.dataset_loader import DatasetLoader
-init_db()
-db = SessionLocal()
-loader = DatasetLoader()
-n = loader.import_to_db(db)
-print(f'Imported {n} resumes')
-db.close()
-"
+docker compose up --build
 ```
 
-Or use the **Load Sample Data** button in the Streamlit UI for synthetic data.
+Services:
+- Frontend: http://localhost:3000
+- Backend API: http://localhost:8000/docs
+- MLflow: http://localhost:5001
+- PostgreSQL: localhost:5432
 
 ---
 
-## REST API Reference
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/upload-resume` | Upload one or more resume files |
-| POST | `/upload-job` | Upload job description (file or text) |
-| GET | `/resumes` | List all stored resumes |
-| GET | `/jobs` | List all stored job descriptions |
-| GET | `/rank?job_id=1` | Run ranking for a job |
-| GET | `/results?job_id=1` | Get stored ranking results |
-| GET | `/history` | Ranking session history |
-| GET | `/evaluate?job_id=1` | Classification metrics |
-| DELETE | `/delete/{id}` | Delete a resume |
-| DELETE | `/jobs/{id}` | Delete a job description |
-| GET | `/health` | Health check |
-
----
-
-## ML Pipeline
+## API Highlights
 
 ```
-Resume File / Text
-        ↓
-ResumeParser (PyMuPDF → pdfplumber → python-docx)
-        ↓
-spaCy NER (PERSON, ORG, DATE entities)
-        ↓
-Regex extractors (email, phone, skills, certifications)
-        ↓
-TextCleaner (lowercase, remove URLs/punctuation, lemmatise, remove stopwords)
-        ↓
-TFIDFEngine.fit([job_desc] + [all_resumes])
-        ↓
-cosine_similarity(job_vec, resume_vecs)  →  scores [0, 1]
-        ↓
-RankingEngine.rank()  →  sorted RankingEntry list
-        ↓
-Recommendation label + skill gap analysis
-```
-
----
-
-## Swapping to SBERT (Future Upgrade)
-
-No frontend or API changes needed. Just set the engine:
-
-```bash
-# Via environment variable
-SIMILARITY_ENGINE=sbert uvicorn backend.app:app --reload
-
-# Or per-request via the API
-GET /rank?job_id=1&engine=sbert
-```
-
-Install the extra dependency:
-
-```bash
-pip install sentence-transformers
-```
-
-The `SBERTEngine` class in `backend/utils/similarity.py` implements the same `SimilarityEngine` interface as `TFIDFEngine` — this is the extensibility contract.
-
----
-
-## Evaluation Metrics
-
-The `/evaluate` endpoint computes (when ground-truth labels are available):
-
-- Accuracy, Precision, Recall, F1-Score
-- Confusion Matrix
-- ROC-AUC
-
-With the Kaggle dataset, each resume's category serves as its ground-truth label.
-
----
-
-## Docker
-
-```bash
-# Build and start both services
-docker-compose up --build
-
-# Backend only
-docker build -t resume-ranker .
-docker run -p 8000:8000 resume-ranker
+POST   /api/auth/signup           Create account
+POST   /api/auth/login            Login → JWT tokens
+POST   /api/resumes/upload        Upload + AI parse resumes
+GET    /api/resumes/search/semantic  FAISS semantic search
+POST   /api/jobs/{id}/rank        Run AI ranking for a job
+GET    /api/jobs/{id}/rankings    Get ranked candidates + SHAP
+PUT    /api/jobs/{id}/pipeline/{resume_id}  Move kanban stage
+GET    /api/analytics/dashboard   Hiring funnel + stats
+POST   /api/training/upload-dataset  Upload Kaggle CSV
+POST   /api/training/train        Train XGBoost/LightGBM/RF
+GET    /api/training/leaderboard  Model performance comparison
+POST   /api/chat                  AI assistant with RAG
 ```
 
 ---
 
 ## Tech Stack
 
-| Component | Technology |
-|-----------|-----------|
-| Backend API | FastAPI + Uvicorn |
-| Frontend | Streamlit |
-| NLP | spaCy, NLTK |
-| ML | scikit-learn (TF-IDF + cosine similarity) |
-| Resume Parsing | PyMuPDF, pdfplumber, python-docx |
-| Database | SQLite + SQLAlchemy |
-| Visualisation | Plotly |
-| Export | pandas, openpyxl, reportlab |
-| Deployment | Docker, docker-compose |
+**Backend:** FastAPI · SQLAlchemy 2.0 (async) · PostgreSQL · Redis · Celery · Alembic  
+**AI/ML:** SBERT · FAISS · XGBoost · LightGBM · scikit-learn · spaCy · MLflow  
+**Frontend:** Next.js 14 · TypeScript · Tailwind CSS · Framer Motion · Recharts · Zustand  
+**DevOps:** Docker · GitHub Actions · Vercel (frontend) · Railway/Render (backend)
+
+---
+
+## Environment Variables
+
+See `.env.example` for all configuration options including:
+- `SECRET_KEY` — JWT signing secret
+- `DATABASE_URL` — SQLite (dev) or PostgreSQL (prod)
+- `SBERT_MODEL` — Sentence transformer model name
+- OAuth credentials for Google and GitHub
+- AWS S3 for resume file storage

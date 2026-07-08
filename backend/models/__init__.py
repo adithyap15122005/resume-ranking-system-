@@ -1,6 +1,16 @@
-from backend.database import Base
+"""ORM models package — import all so they register with SQLAlchemy Base."""
+from backend.models.organization import Organization
+from backend.models.user import User
 from backend.models.resume import Resume
 from backend.models.job import JobDescription
 from backend.models.ranking import RankingResult
+from backend.models.notification import Notification
 
-__all__ = ["Base", "Resume", "JobDescription", "RankingResult"]
+__all__ = [
+    "Organization",
+    "User",
+    "Resume",
+    "JobDescription",
+    "RankingResult",
+    "Notification",
+]

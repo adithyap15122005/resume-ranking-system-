@@ -1,27 +1,78 @@
 version: "3.9"
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hireiq
+      POSTGRES_USER: hireiq
+      POSTGRES_PASSWORD: hireiq_secret
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hireiq"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
   backend:
-    build: .
-    command: uvicorn backend.app:app --host 0.0.0.0 --port 8000
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
     ports:
       - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://hireiq:hireiq_secret@postgres:5432/hireiq
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      CORS_ORIGINS: '["http://localhost:3000"]'
+      AUTO_VERIFY_EMAIL: "true"
+      DEBUG: "false"
     volumes:
       - ./uploads:/app/uploads
       - ./trained:/app/trained
-      - ./logs:/app/logs
-    environment:
-      - DEBUG=false
-      - SIMILARITY_ENGINE=tfidf
-    restart: unless-stopped
+      - ./datasets:/app/datasets
+      - ./embeddings:/app/embeddings
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
 
   frontend:
-    build: .
-    command: streamlit run frontend/streamlit_app.py --server.port 8501 --server.address 0.0.0.0
+    build:
+      context: ./frontend-next
+      dockerfile: Dockerfile
+    restart: unless-stopped
     ports:
-      - "8501:8501"
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://backend:8000
     depends_on:
       - backend
-    environment:
-      - API_BASE_URL=http://backend:8000
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.18.0
     restart: unless-stopped
+    ports:
+      - "5001:5000"
+    command: mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:///mlflow.db --default-artifact-root /mlruns
+    volumes:
+      - mlflow_data:/mlruns
+
+volumes:
+  postgres_data:
+  redis_data:
+  mlflow_data:
