@@ -203,11 +203,12 @@ export const analyticsApi = {
 
 // ── Training ──────────────────────────────────────────────────────────────────
 export const trainingApi = {
+  // Step 1: Dataset Upload
   uploadDataset: (file: File, onProgress?: (pct: number) => void) => {
     const form = new FormData();
     form.append("file", file);
     return api
-      .post("/api/training/upload-dataset", form, {
+      .post("/api/training/datasets/upload", form, {
         headers: { "Content-Type": "multipart/form-data" },
         onUploadProgress: (e) => {
           if (onProgress && e.total) onProgress(Math.round((e.loaded / e.total) * 100));
@@ -216,16 +217,58 @@ export const trainingApi = {
       .then((r) => r.data);
   },
 
+  listDatasets: () => api.get("/api/training/datasets").then((r) => r.data),
+  getDataset: (id: string) => api.get(`/api/training/datasets/${id}`).then((r) => r.data),
+
+  // Step 2: EDA
+  analyzeDataset: (datasetId: string) =>
+    api.post(`/api/training/datasets/${datasetId}/analyze`).then((r) => r.data),
+
+  // Step 3: Feature Engineering
+  engineerFeatures: (datasetId: string, targetColumn: string) =>
+    api.post(`/api/training/datasets/${datasetId}/engineer`, null, {
+      params: { target_column: targetColumn },
+    }).then((r) => r.data),
+
+  // Step 4: Training
+  startExperiment: (body: {
+    dataset_id: string;
+    name: string;
+    target_column: string;
+    algorithms?: string[];
+    feature_columns?: string[];
+  }) => api.post("/api/training/experiments", body).then((r) => r.data),
+
+  getExperiment: (experimentId: string) =>
+    api.get(`/api/training/experiments/${experimentId}`).then((r) => r.data),
+
+  listExperiments: () => api.get("/api/training/experiments").then((r) => r.data),
+
+  // Step 5: Model Leaderboard & Deployment
+  listModels: () => api.get("/api/training/models").then((r) => r.data),
+  getProductionModel: () => api.get("/api/training/models/production").then((r) => r.data),
+  deployModel: (modelId: string) =>
+    api.post(`/api/training/models/${modelId}/deploy`).then((r) => r.data),
+  setExperimental: (modelId: string) =>
+    api.post(`/api/training/models/${modelId}/set-experimental`).then((r) => r.data),
+  deleteModel: (modelId: string) =>
+    api.delete(`/api/training/models/${modelId}`).then((r) => r.data),
+
+  // Continuous Learning
+  recordOutcome: (body: {
+    resume_id: string;
+    job_id: string;
+    ranking_result_id?: string;
+    interview_score?: number;
+    hiring_decision: string;
+    offer_extended?: boolean;
+    offer_accepted?: boolean;
+    notes?: string;
+  }) => api.post("/api/training/outcomes", body).then((r) => r.data),
+  listOutcomes: () => api.get("/api/training/outcomes").then((r) => r.data),
+
+  // Legacy (keep for compatibility)
   datasets: () => api.get("/api/training/datasets").then((r) => r.data),
-  analyze: (dataset_id: string) =>
-    api.post(`/api/training/analyze/${dataset_id}`).then((r) => r.data),
-  train: (body: { dataset_id: string; target_column: string; drop_cols?: string[] }) =>
-    api.post("/api/training/train", { dataset_id: body.dataset_id, target_col: body.target_column, drop_cols: body.drop_cols }).then((r) => r.data),
-  status: (job_id: string) =>
-    api.get(`/api/training/status/${job_id}`).then((r) => r.data),
-  leaderboard: () => api.get("/api/training/leaderboard").then((r) => r.data),
-  featureImportance: (job_id: string, model_name: string) =>
-    api.get(`/api/training/feature-importance/${job_id}`, { params: { model_name } }).then((r) => r.data),
 };
 
 // ── Chat ──────────────────────────────────────────────────────────────────────

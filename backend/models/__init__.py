@@ -5,6 +5,10 @@ from backend.models.resume import Resume
 from backend.models.job import JobDescription
 from backend.models.ranking import RankingResult
 from backend.models.notification import Notification
+from backend.models.ml_model import MLModel
+from backend.models.training_dataset import TrainingDataset
+from backend.models.training_experiment import TrainingExperiment
+from backend.models.hiring_outcome import HiringOutcome
 
 __all__ = [
     "Organization",
@@ -13,4 +17,8 @@ __all__ = [
     "JobDescription",
     "RankingResult",
     "Notification",
+    "MLModel",
+    "TrainingDataset",
+    "TrainingExperiment",
+    "HiringOutcome",
 ]

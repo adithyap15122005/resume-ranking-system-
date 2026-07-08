@@ -7,22 +7,38 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Brain, LayoutDashboard, Users, Briefcase, Trophy, Kanban,
   BarChart3, ChevronLeft, ChevronRight, MessageSquare, Settings,
-  LogOut, Building2, BookOpen,
+  LogOut, FlaskConical, Database, ShieldCheck,
 } from "lucide-react";
 import { useAuthStore } from "@/store/auth";
 import { getRoleLabel } from "@/lib/auth";
 
-const NAV_ITEMS = [
+// Items visible to all roles
+const COMMON_NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/candidates", label: "Candidates", icon: Users },
   { href: "/jobs", label: "Jobs", icon: Briefcase },
   { href: "/rankings", label: "Rankings", icon: Trophy },
   { href: "/pipeline", label: "Pipeline", icon: Kanban },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
-  { href: "/training", label: "AI Training", icon: BookOpen },
   { href: "/assistant", label: "AI Assistant", icon: MessageSquare },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
+
+// Admin-only items
+const ADMIN_NAV = [
+  { href: "/training", label: "ML Console", icon: FlaskConical },
+];
+
+function getNavItems(role?: string) {
+  if (role === "admin" || role === "hr_manager") {
+    return [
+      ...COMMON_NAV.slice(0, 6),
+      ...ADMIN_NAV,
+      ...COMMON_NAV.slice(6),
+    ];
+  }
+  return COMMON_NAV;
+}
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -31,6 +47,9 @@ export function Sidebar() {
 
   const isActive = (href: string) =>
     href === "/dashboard" ? pathname === "/dashboard" : pathname.startsWith(href);
+
+  const navItems = getNavItems(user?.role);
+  const isAdmin = user?.role === "admin" || user?.role === "hr_manager";
 
   return (
     <motion.aside
@@ -52,7 +71,9 @@ export function Sidebar() {
               transition={{ duration: 0.15 }}
             >
               <div className="font-bold text-white text-lg leading-none">HireIQ</div>
-              <div className="text-xs text-slate-500 mt-0.5">AI Hiring Platform</div>
+              <div className="text-xs text-slate-500 mt-0.5">
+                {isAdmin ? "Admin Console" : "Recruiter View"}
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -60,7 +81,7 @@ export function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        {NAV_ITEMS.map(({ href, label, icon: Icon }) => (
+        {navItems.map(({ href, label, icon: Icon }) => (
           <Link key={href} href={href}>
             <div
               className={`${isActive(href) ? "sidebar-item-active" : "sidebar-item-inactive"} ${collapsed ? "justify-center" : ""}`}
@@ -89,8 +110,12 @@ export function Sidebar() {
       <div className="px-3 py-4 border-t border-slate-700/50">
         {user && (
           <div className={`flex items-center gap-3 px-2 py-2 rounded-xl ${collapsed ? "justify-center" : ""}`}>
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-400 to-violet-500 flex items-center justify-center text-white text-sm font-medium flex-shrink-0">
-              {user.full_name?.[0]?.toUpperCase() || "U"}
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-medium flex-shrink-0 ${
+              isAdmin
+                ? "bg-gradient-to-br from-amber-400 to-orange-500"
+                : "bg-gradient-to-br from-indigo-400 to-violet-500"
+            }`}>
+              {isAdmin ? <ShieldCheck className="w-4 h-4" /> : (user.full_name?.[0]?.toUpperCase() || "U")}
             </div>
             <AnimatePresence>
               {!collapsed && (
@@ -101,7 +126,9 @@ export function Sidebar() {
                   className="flex-1 min-w-0"
                 >
                   <div className="text-sm font-medium text-white truncate">{user.full_name}</div>
-                  <div className="text-xs text-slate-500 truncate">{getRoleLabel(user.role)}</div>
+                  <div className={`text-xs truncate ${isAdmin ? "text-amber-500" : "text-slate-500"}`}>
+                    {getRoleLabel(user.role)}
+                  </div>
                 </motion.div>
               )}
             </AnimatePresence>

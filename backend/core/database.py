@@ -56,11 +56,13 @@ async def get_db() -> AsyncSession:
 
 async def init_db() -> None:
     """Create all tables and apply any missing column migrations."""
-    from backend.models import job, notification, organization, ranking, resume, user  # noqa: F401
+    from backend.models import (  # noqa: F401
+        job, notification, organization, ranking, resume, user,
+        ml_model, training_dataset, training_experiment, hiring_outcome,
+    )
 
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Add columns that may be missing in existing DBs after schema updates
         await conn.run_sync(_apply_missing_columns)
 
     logger.info("HireIQ database tables initialised.")
