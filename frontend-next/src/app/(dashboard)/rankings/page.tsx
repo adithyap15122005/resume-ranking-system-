@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Trophy, Search, Zap, CheckCircle, XCircle, AlertCircle,
-  Brain, TrendingUp, Award, Loader2, ChevronDown,
+  Brain, TrendingUp, Award, Loader2, ChevronDown, Target,
+  Sparkles, SlidersHorizontal,
 } from "lucide-react";
 import { jobApi } from "@/lib/api";
 import toast from "react-hot-toast";
@@ -38,7 +39,6 @@ interface RankingResult {
     ranking_mode?: string;
     feature_shap?: Record<string, number>;
   };
-  // flat list of strings from backend
   ai_interview_questions?: string[];
   candidate_name?: string;
   candidate_email?: string;
@@ -52,7 +52,6 @@ interface Job {
   required_skills: string[];
 }
 
-// Safe percentage formatter — never returns NaN
 function pct(value: number | undefined | null): string {
   const v = typeof value === "number" && isFinite(value) ? value : 0;
   return `${Math.round(v * 100)}%`;
@@ -114,6 +113,11 @@ export default function RankingsPage() {
   const [jobsLoading, setJobsLoading] = useState(true);
   const [rankingMode, setRankingMode] = useState<"traditional" | "semantic" | "ml" | "hybrid">("hybrid");
 
+  // Threshold state
+  const [threshold, setThreshold] = useState<number>(70);
+  const [showThreshold, setShowThreshold] = useState<boolean>(false);
+  const [applyingThreshold, setApplyingThreshold] = useState(false);
+
   useEffect(() => {
     jobApi.list()
       .then((data) => {
@@ -142,13 +146,44 @@ export default function RankingsPage() {
     if (selectedJob) fetchRankings(selectedJob);
   }, [selectedJob, fetchRankings]);
 
+  // Auto-shortlist candidates above threshold
+  const applyThresholdShortlist = async (
+    results: RankingResult[],
+    jobId: string,
+    thresh: number
+  ) => {
+    const eligible = results.filter(
+      (r) =>
+        (r.similarity_score || 0) >= thresh &&
+        !r.is_shortlisted &&
+        r.pipeline_stage !== "rejected"
+    );
+    if (eligible.length === 0) return 0;
+    await Promise.all(
+      eligible.map((r) =>
+        jobApi.movePipeline(jobId, r.resume_id, "shortlisted").catch(() => {})
+      )
+    );
+    return eligible.length;
+  };
+
   const handleRun = async () => {
     if (!selectedJob) return;
     setRanking(true);
     try {
-      const results = await jobApi.rank(selectedJob, 0, rankingMode);
+      const results: RankingResult[] = await jobApi.rank(selectedJob, 0, rankingMode);
       toast.success(`AI ranked ${results.length} candidates!`);
-      fetchRankings(selectedJob);
+
+      // Auto-shortlist above threshold
+      const count = await applyThresholdShortlist(results, selectedJob, threshold);
+      if (count > 0) {
+        toast.success(
+          `Auto-shortlisted ${count} candidate${count !== 1 ? "s" : ""} scoring ≥ ${threshold}%`,
+          { icon: "✅", duration: 4000 }
+        );
+      }
+
+      await fetchRankings(selectedJob);
     } catch {
       toast.error("Ranking failed");
     } finally {
@@ -156,11 +191,35 @@ export default function RankingsPage() {
     }
   };
 
+  // Apply threshold to already-loaded rankings (without re-ranking)
+  const handleApplyThreshold = async () => {
+    if (!selectedJob || rankings.length === 0) return;
+    setApplyingThreshold(true);
+    try {
+      const count = await applyThresholdShortlist(rankings, selectedJob, threshold);
+      if (count > 0) {
+        toast.success(
+          `Auto-shortlisted ${count} candidate${count !== 1 ? "s" : ""} scoring ≥ ${threshold}%`,
+          { icon: "✅" }
+        );
+        await fetchRankings(selectedJob);
+      } else {
+        toast(`No unshortlisted candidates above ${threshold}%`, { icon: "ℹ️" });
+      }
+    } catch {
+      toast.error("Failed to apply threshold");
+    } finally {
+      setApplyingThreshold(false);
+    }
+  };
+
   const handleShortlist = async (resultId: string, resumeId: string) => {
     try {
       await jobApi.movePipeline(selectedJob, resumeId, "shortlisted");
       setRankings((prev) =>
-        prev.map((r) => r.id === resultId ? { ...r, pipeline_stage: "shortlisted", is_shortlisted: true } : r)
+        prev.map((r) =>
+          r.id === resultId ? { ...r, pipeline_stage: "shortlisted", is_shortlisted: true } : r
+        )
       );
       toast.success("Candidate shortlisted!");
     } catch { toast.error("Failed"); }
@@ -170,7 +229,9 @@ export default function RankingsPage() {
     try {
       await jobApi.movePipeline(selectedJob, resumeId, "rejected");
       setRankings((prev) =>
-        prev.map((r) => r.id === resultId ? { ...r, pipeline_stage: "rejected" } : r)
+        prev.map((r) =>
+          r.id === resultId ? { ...r, pipeline_stage: "rejected" } : r
+        )
       );
       toast.success("Candidate rejected");
     } catch { toast.error("Failed"); }
@@ -189,6 +250,10 @@ export default function RankingsPage() {
     rankings.length > 0
       ? rankings.reduce((a, r) => a + (r.similarity_score || 0), 0) / rankings.length
       : 0;
+
+  const aboveThresholdCount = rankings.filter(
+    (r) => (r.similarity_score || 0) >= threshold
+  ).length;
 
   return (
     <div className="space-y-6 max-w-7xl">
@@ -226,6 +291,25 @@ export default function RankingsPage() {
             })}
           </div>
 
+          {/* Threshold toggle button */}
+          <button
+            onClick={() => setShowThreshold((v) => !v)}
+            className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-xs font-medium border transition-all ${
+              showThreshold
+                ? "bg-amber-500/15 border-amber-500/40 text-amber-400"
+                : "bg-slate-900/80 border-slate-700/50 text-slate-400 hover:text-white hover:bg-white/5"
+            }`}
+            title="Configure auto-select threshold"
+          >
+            <Target className="w-4 h-4" />
+            <span>Threshold</span>
+            {rankings.length > 0 && (
+              <span className="bg-amber-500/20 text-amber-300 px-1.5 rounded text-xs">
+                {threshold}%
+              </span>
+            )}
+          </button>
+
           <div className="relative">
             <select
               value={selectedJob}
@@ -242,6 +326,7 @@ export default function RankingsPage() {
             </select>
             <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
           </div>
+
           <button
             onClick={handleRun}
             disabled={ranking || !selectedJob}
@@ -253,18 +338,131 @@ export default function RankingsPage() {
         </div>
       </div>
 
+      {/* Threshold panel */}
+      <AnimatePresence>
+        {showThreshold && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            className="overflow-hidden"
+          >
+            <div className="bg-slate-900/80 border border-amber-500/25 rounded-2xl p-5">
+              <div className="flex items-start justify-between flex-wrap gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/15 flex items-center justify-center flex-shrink-0">
+                    <Target className="w-5 h-5 text-amber-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                      Auto-Select Threshold
+                      <span className="text-xs font-normal text-slate-500">
+                        — candidates scoring at or above this are automatically shortlisted
+                      </span>
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Applied when you click <strong className="text-slate-400">Run AI Ranking</strong> or{" "}
+                      <strong className="text-slate-400">Apply Now</strong>.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Threshold value display */}
+                <div className="flex items-center gap-3">
+                  <div className="text-center">
+                    <div className="text-3xl font-bold text-amber-400 tabular-nums leading-none">
+                      {threshold}
+                      <span className="text-lg">%</span>
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1">
+                      {rankings.length > 0
+                        ? `${aboveThresholdCount} of ${rankings.length} qualify`
+                        : "threshold"}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Slider */}
+              <div className="mt-4 space-y-2">
+                <div className="flex justify-between text-xs text-slate-600">
+                  <span>0% (everyone)</span>
+                  <span>50% (half)</span>
+                  <span>100% (perfect only)</span>
+                </div>
+                <div className="relative">
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={5}
+                    value={threshold}
+                    onChange={(e) => setThreshold(Number(e.target.value))}
+                    className="w-full h-2 rounded-full appearance-none cursor-pointer"
+                    style={{
+                      background: `linear-gradient(to right, #f59e0b ${threshold}%, #1e293b ${threshold}%)`,
+                    }}
+                  />
+                </div>
+
+                {/* Preset quick-picks */}
+                <div className="flex items-center gap-2 flex-wrap pt-1">
+                  <span className="text-xs text-slate-500">Quick pick:</span>
+                  {[50, 60, 70, 75, 80, 85, 90].map((v) => (
+                    <button
+                      key={v}
+                      onClick={() => setThreshold(v)}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all border ${
+                        threshold === v
+                          ? "bg-amber-500/20 border-amber-500/50 text-amber-300"
+                          : "border-slate-700 text-slate-500 hover:text-white hover:border-slate-500"
+                      }`}
+                    >
+                      {v}%
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Info band + Apply button */}
+              <div className="mt-4 flex items-center justify-between gap-4 flex-wrap">
+                <div className="flex items-start gap-2 text-xs text-slate-400">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400 mt-0.5 flex-shrink-0" />
+                  <span>
+                    Candidates scoring <strong className="text-amber-300">≥ {threshold}%</strong> will be
+                    moved to <strong className="text-emerald-300">Shortlisted</strong> automatically.
+                    Already-rejected candidates are skipped.
+                  </span>
+                </div>
+
+                <button
+                  onClick={handleApplyThreshold}
+                  disabled={applyingThreshold || rankings.length === 0}
+                  className="flex items-center gap-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors whitespace-nowrap"
+                >
+                  {applyingThreshold
+                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                    : <SlidersHorizontal className="w-4 h-4" />}
+                  {applyingThreshold ? "Applying..." : "Apply Now"}
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Stats strip */}
       {rankings.length > 0 && (
         <div className="grid grid-cols-4 gap-3">
           {[
-            { label: "Total Ranked", value: rankings.length, icon: Trophy, color: "text-indigo-400" },
-            { label: "Shortlisted", value: rankings.filter((r) => r.is_shortlisted).length, icon: CheckCircle, color: "text-emerald-400" },
-            { label: "Avg Score", value: pct100(avgScore), icon: TrendingUp, color: "text-amber-400" },
+            { label: "Total Ranked",   value: rankings.length,                               icon: Trophy,      color: "text-indigo-400" },
+            { label: "Shortlisted",    value: rankings.filter((r) => r.is_shortlisted).length, icon: CheckCircle, color: "text-emerald-400" },
+            { label: "Avg Score",      value: pct100(avgScore),                              icon: TrendingUp,  color: "text-amber-400" },
             {
-              label: rankingMode === "ml" || rankingMode === "hybrid" ? "Top ML Prob" : "Top AI Score",
-              value: pct(rankings[0]?.hiring_probability),
-              icon: Award,
-              color: "text-violet-400",
+              label: `Above ${threshold}%`,
+              value: aboveThresholdCount,
+              icon: Target,
+              color: aboveThresholdCount > 0 ? "text-amber-400" : "text-slate-600",
             },
           ].map(({ label, value, icon: Icon, color }) => (
             <div key={label} className="bg-slate-900/80 border border-slate-700/50 rounded-xl p-4 flex items-center gap-3">
@@ -316,6 +514,8 @@ export default function RankingsPage() {
             {filtered.map((result, i) => {
               const isRejected = result.pipeline_stage === "rejected";
               const isShortlisted = result.is_shortlisted;
+              const score = result.similarity_score || 0;
+              const meetsThreshold = score >= threshold && !isShortlisted && !isRejected;
 
               return (
                 <motion.div
@@ -328,6 +528,8 @@ export default function RankingsPage() {
                       ? "border-red-500/20 opacity-60"
                       : isShortlisted
                       ? "border-emerald-500/30"
+                      : meetsThreshold
+                      ? "border-amber-500/30"
                       : "border-slate-700/50"
                   }`}
                   onClick={() => setDetailId(result.id === detailId ? null : result.id)}
@@ -339,14 +541,24 @@ export default function RankingsPage() {
                     </div>
 
                     {/* Avatar */}
-                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white font-semibold text-sm flex-shrink-0">
+                    <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white font-semibold text-sm flex-shrink-0 bg-gradient-to-br ${
+                      meetsThreshold
+                        ? "from-amber-500 to-orange-500"
+                        : "from-indigo-500 to-violet-600"
+                    }`}>
                       {result.candidate_name?.[0]?.toUpperCase() || "?"}
                     </div>
 
                     {/* Name + email */}
                     <div className="flex-1 min-w-0">
-                      <div className="font-medium text-white text-sm truncate">
+                      <div className="font-medium text-white text-sm truncate flex items-center gap-2">
                         {result.candidate_name || "Unknown"}
+                        {meetsThreshold && (
+                          <span className="inline-flex items-center gap-1 text-xs bg-amber-500/15 text-amber-400 border border-amber-500/25 px-1.5 py-0.5 rounded-md font-medium">
+                            <Target className="w-2.5 h-2.5" />
+                            Above threshold
+                          </span>
+                        )}
                       </div>
                       <div className="text-xs text-slate-500 truncate">{result.candidate_email}</div>
                     </div>
@@ -354,9 +566,9 @@ export default function RankingsPage() {
                     {/* Component score bars */}
                     <div className="hidden lg:flex items-center gap-6 flex-shrink-0">
                       {[
-                        { label: "Semantic", val: result.semantic_score, color: "bg-indigo-500" },
-                        { label: "Skills",   val: result.skill_score,    color: "bg-violet-500" },
-                        { label: "Exp.",     val: result.experience_score, color: "bg-amber-500" },
+                        { label: "Semantic", val: result.semantic_score,    color: "bg-indigo-500" },
+                        { label: "Skills",   val: result.skill_score,       color: "bg-violet-500" },
+                        { label: "Exp.",     val: result.experience_score,  color: "bg-amber-500" },
                       ].map(({ label, val, color }) => (
                         <div key={label} className="text-center w-16">
                           <div className="text-xs text-slate-500 mb-1">{label}</div>
@@ -373,8 +585,8 @@ export default function RankingsPage() {
 
                     {/* Total score (0–100) */}
                     <div className="flex-shrink-0 text-right w-16">
-                      <div className={`text-xl font-bold ${ScoreColor(result.similarity_score || 0)}`}>
-                        {pct100(result.similarity_score)}
+                      <div className={`text-xl font-bold ${ScoreColor(score)}`}>
+                        {pct100(score)}
                       </div>
                       <div className="text-xs text-slate-500">match</div>
                     </div>
@@ -427,7 +639,6 @@ export default function RankingsPage() {
                                 : "AI Score Breakdown"}
                             </div>
 
-                            {/* Feature SHAP bars (ML / Hybrid mode) */}
                             {result.shap_values?.feature_shap &&
                               Object.keys(result.shap_values.feature_shap).length > 0 ? (
                               <div className="space-y-1.5">
@@ -462,8 +673,8 @@ export default function RankingsPage() {
                               </div>
                             ) : (
                               <>
-                                <ScoreBar label="Semantic Match (50%)" value={result.semantic_score} color="bg-indigo-500" />
-                                <ScoreBar label="Skill Overlap (30%)" value={result.skill_score} color="bg-violet-500" />
+                                <ScoreBar label="Semantic Match (35%)" value={result.semantic_score} color="bg-indigo-500" />
+                                <ScoreBar label="Skill Overlap (45%)" value={result.skill_score} color="bg-violet-500" />
                                 <ScoreBar label="Experience (20%)" value={result.experience_score} color="bg-amber-500" />
                               </>
                             )}
@@ -483,6 +694,12 @@ export default function RankingsPage() {
                                   <span className="text-indigo-400 capitalize">{result.shap_values.ranking_mode}</span>
                                 </div>
                               )}
+                              <div className="flex justify-between text-xs mt-1">
+                                <span className="text-slate-600">Threshold</span>
+                                <span className={score >= threshold ? "text-amber-400" : "text-slate-500"}>
+                                  {score >= threshold ? `≥ ${threshold}% ✓` : `< ${threshold}%`}
+                                </span>
+                              </div>
                             </div>
                             {result.recommendation && (
                               <div className="text-xs text-slate-400 italic">{result.recommendation}</div>
