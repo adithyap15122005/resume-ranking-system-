@@ -35,6 +35,7 @@ from data.skills_db import (
     PROGRAMMING_LANGUAGES,
     TOOLS_GENERAL,
 )
+from backend.utils.experience_parser import parse_experience_years, extract_companies, extract_job_titles
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +208,9 @@ class ResumeParser:
         certifications = self._extract_certifications(text)
         education = self._extract_education(text, sections, doc)
         experience_text = sections.get("experience", "")
-        experience_years = self._estimate_experience_years(text)
+        experience_years = parse_experience_years(text)  # Enhanced parser
+        companies = extract_companies(experience_text or text)
+        job_titles = extract_job_titles(experience_text or text)
         projects = self._extract_projects(text, sections)
         languages = self._extract_languages(text)
         tools = self._extract_tools(text, skills)
@@ -221,6 +224,8 @@ class ResumeParser:
             "education": education,
             "experience": experience_text[:2000] if experience_text else self._fallback_experience(text),
             "experience_years": experience_years,
+            "companies": companies,
+            "job_titles": job_titles,
             "projects": projects,
             "certifications": certifications,
             "languages": languages,
@@ -239,6 +244,8 @@ class ResumeParser:
             "education": [],
             "experience": None,
             "experience_years": 0.0,
+            "companies": [],
+            "job_titles": [],
             "projects": [],
             "certifications": [],
             "languages": [],
