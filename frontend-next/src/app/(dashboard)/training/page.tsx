@@ -73,6 +73,7 @@ interface MLModel {
   training_samples: number;
   feature_importance?: Record<string, number>;
   confusion_matrix_data?: { matrix: number[][]; labels: string[] };
+  feature_names?: string[];
   trained_at: string | null;
   deployed_at: string | null;
 }
@@ -1130,6 +1131,46 @@ export default function TrainingPage() {
                             )}
                           </div>
                         </div>
+                      </div>
+                    )}
+
+                    {/* Feature Metadata */}
+                    {selectedModel.feature_names && selectedModel.feature_names.length > 0 && (
+                      <div>
+                        <h4 className="text-xs font-semibold text-slate-400 mb-3">
+                          Model Features ({selectedModel.feature_names.length})
+                        </h4>
+                        <div className="grid grid-cols-2 gap-1">
+                          {selectedModel.feature_names.map((f, i) => (
+                            <code
+                              key={i}
+                              className="text-xs bg-slate-800/60 text-slate-300 px-2 py-1 rounded border border-slate-700/40 truncate"
+                              title={f}
+                            >
+                              {f}
+                            </code>
+                          ))}
+                        </div>
+                        {/* Compatibility badge */}
+                        {selectedModel.feature_names.every((f) =>
+                          [
+                            "tfidf_similarity","sbert_similarity","skill_match_required",
+                            "skill_match_preferred","experience_match","education_score",
+                            "ats_score","projects_count_norm","certifications_count_norm",
+                            "languages_count_norm","soft_skills_count_norm","has_portfolio",
+                            "has_github","years_experience_norm","skills_count_norm","keyword_density",
+                          ].includes(f)
+                        ) ? (
+                          <div className="mt-2 flex items-center gap-1.5 text-xs text-emerald-400">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            Compatible with Hybrid AI ranking mode
+                          </div>
+                        ) : (
+                          <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-400">
+                            <AlertCircle className="w-3.5 h-3.5" />
+                            Custom features — Hybrid mode falls back to Traditional
+                          </div>
+                        )}
                       </div>
                     )}
 

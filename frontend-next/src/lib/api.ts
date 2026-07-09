@@ -179,8 +179,12 @@ export const jobApi = {
 
   delete: (id: string) => api.delete(`/api/jobs/${id}`),
 
-  rank: (id: string, minScore = 0) =>
-    api.post(`/api/jobs/${id}/rank`, null, { params: { min_score: minScore } }).then((r) => r.data),
+  rank: (id: string, minScore = 0, rankingMode = "hybrid") =>
+    api
+      .post(`/api/jobs/${id}/rank`, null, {
+        params: { min_score: minScore, ranking_mode: rankingMode },
+      })
+      .then((r) => r.data),
 
   getRankings: (id: string) =>
     api.get(`/api/jobs/${id}/rankings`).then((r) => r.data),

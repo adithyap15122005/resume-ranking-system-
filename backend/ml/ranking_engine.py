@@ -231,6 +231,92 @@ class AdvancedRankingEngine:
         except Exception:
             return 0.5
 
+    # ── ML Scoring ────────────────────────────────────────────────────────────
+
+    def _ml_score(
+        self,
+        resume_dict: Dict[str, Any],
+        job_dict: Dict[str, Any],
+        resume_emb: Optional[np.ndarray],
+        job_emb: Optional[np.ndarray],
+        ml_artifact: Dict[str, Any],
+    ) -> Tuple[float, Dict[str, float]]:
+        """
+        Run the production ML model on a single resume.
+        Returns (probability_of_shortlisting_0_to_1, shap_feature_dict).
+        Falls back gracefully — never raises.
+        """
+        from backend.ml.feature_engineering import ResumeFeatureExtractor
+
+        extractor = ResumeFeatureExtractor()
+        features = extractor.extract_single(resume_dict, job_dict, resume_emb, job_emb)
+
+        preprocessor = ml_artifact.get("preprocessor")
+        if preprocessor is not None:
+            try:
+                features = preprocessor.transform(features.reshape(1, -1))[0]
+            except Exception:
+                pass
+
+        model = ml_artifact["model"]
+        try:
+            proba = model.predict_proba(features.reshape(1, -1))[0]
+        except Exception:
+            return 0.5, {}
+
+        # Identify the positive class index (Shortlisted=1)
+        le = ml_artifact.get("label_encoder")
+        pos_idx = 1
+        if le is not None:
+            try:
+                classes = list(le.classes_)
+                for ci, cl in enumerate(classes):
+                    if str(cl).strip() in ("1", "Shortlisted", "shortlisted", "yes", "Yes", "True", "true"):
+                        pos_idx = ci
+                        break
+            except Exception:
+                pass
+        pos_idx = min(pos_idx, len(proba) - 1)
+        ml_prob = float(np.clip(proba[pos_idx], 0.0, 1.0))
+
+        # SHAP explanations — best-effort, never block inference
+        shap_dict: Dict[str, float] = {}
+        try:
+            import shap as shap_lib  # optional dependency
+
+            feature_names = (
+                ml_artifact.get("feature_names")
+                or ResumeFeatureExtractor.FEATURE_NAMES
+            )
+            raw_features = features.reshape(1, -1)
+
+            if hasattr(model, "feature_importances_"):
+                explainer = shap_lib.TreeExplainer(model)
+                shap_vals = explainer.shap_values(raw_features)
+                if isinstance(shap_vals, list):
+                    vals = shap_vals[pos_idx][0]
+                else:
+                    vals = shap_vals[0]
+                shap_dict = {
+                    name: round(float(v), 4)
+                    for name, v in zip(feature_names, vals)
+                }
+            elif hasattr(model, "coef_"):
+                explainer = shap_lib.LinearExplainer(
+                    model,
+                    masker=shap_lib.maskers.Independent(raw_features),
+                )
+                shap_vals = explainer.shap_values(raw_features)
+                vals = shap_vals[0] if hasattr(shap_vals, "__len__") and shap_vals.ndim == 2 else shap_vals
+                shap_dict = {
+                    name: round(float(v), 4)
+                    for name, v in zip(feature_names, vals)
+                }
+        except Exception:
+            pass  # SHAP is best-effort
+
+        return ml_prob, shap_dict
+
     # ── Main Ranking Pipeline ─────────────────────────────────────────────────
 
     def rank_candidates(
@@ -241,6 +327,9 @@ class AdvancedRankingEngine:
         job_skills_preferred: List[str],
         resume_data: Dict[str, Dict],
         job_text: str = "",
+        ranking_mode: str = "hybrid",
+        ml_artifact: Optional[Dict[str, Any]] = None,
+        job_dict: Optional[Dict[str, Any]] = None,
     ) -> List["RankingResult"]:
         results: List[RankingResult] = []
 
@@ -272,20 +361,45 @@ class AdvancedRankingEngine:
             exp_req = rdata.get("experience_requirement") or ""
             experience_score = self.compute_experience_score(exp_years, exp_req)
 
-            # ── Composite (0–1 → stored as 0–100) ────────────────────────────
-            composite_01 = (
+            # ── Traditional composite (0–1) — always computed as baseline ────
+            traditional_01 = (
                 semantic_score * self.EMBEDDING_WEIGHT
                 + skill_score * self.SKILL_WEIGHT
                 + experience_score * self.EXPERIENCE_WEIGHT
             )
-            composite_01 = round(min(max(_safe_float(composite_01), 0.0), 1.0), 4)
+            traditional_01 = round(min(max(_safe_float(traditional_01), 0.0), 1.0), 4)
+
+            # ── ML / Hybrid scoring ───────────────────────────────────────────
+            ml_prob = traditional_01   # fallback value
+            ml_shap: Dict[str, float] = {}
+
+            if ranking_mode in ("ml", "hybrid") and ml_artifact:
+                try:
+                    ml_prob, ml_shap = self._ml_score(
+                        rdata, job_dict or {}, resume_emb, job_embedding, ml_artifact
+                    )
+                except Exception as exc:
+                    logger.warning("ML score failed for %s: %s", resume_id, exc)
+                    ml_prob = traditional_01
+
+            if ranking_mode == "ml":
+                composite_01 = round(min(max(_safe_float(ml_prob), 0.0), 1.0), 4)
+            elif ranking_mode == "hybrid":
+                composite_01 = round(
+                    min(max(ml_prob * 0.70 + semantic_score * 0.20 + skill_score * 0.10, 0.0), 1.0),
+                    4,
+                )
+            else:
+                # "traditional" or "semantic" — use baseline
+                composite_01 = traditional_01
+
             similarity_score_100 = round(composite_01 * 100, 2)
 
             # ── Keyword density ───────────────────────────────────────────────
             resume_text = rdata.get("cleaned_text") or rdata.get("raw_text") or ""
             kd = self._keyword_density(resume_text, job_text)
 
-            # ── Skill contributions for SHAP ──────────────────────────────────
+            # ── SHAP contributions ────────────────────────────────────────────
             skill_weight_per = round(skill_score / max(len(matched), 1), 3) if matched else 0.0
             skill_detail_map: Dict[str, float] = {}
             for s in matched[:6]:
@@ -296,6 +410,10 @@ class AdvancedRankingEngine:
             shap = self.compute_shap_contributions(
                 semantic_score, skill_score, experience_score, skill_detail_map
             )
+            # Merge ML SHAP values and record active ranking mode
+            if ml_shap:
+                shap["feature_shap"] = ml_shap
+            shap["ranking_mode"] = ranking_mode
 
             results.append(
                 RankingResult(
@@ -314,7 +432,7 @@ class AdvancedRankingEngine:
                     experience_contribution=experience_score,
                     education_contribution=0.0,
                     technical_score=semantic_score,
-                    hiring_probability=composite_01,
+                    hiring_probability=ml_prob if ranking_mode in ("ml", "hybrid") else composite_01,
                     keyword_density=kd,
                     experience_years=exp_years,
                     quality_score=_safe_float(rdata.get("completeness_score"), 0.0),

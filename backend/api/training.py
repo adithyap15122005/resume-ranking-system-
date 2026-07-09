@@ -5,15 +5,17 @@ Step 4: Multi-model Training  Step 5: Model Leaderboard & Deployment
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
-import pickle
+import shutil
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import joblib
 import numpy as np
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
@@ -320,7 +322,11 @@ async def delete_model(
     if model.deployment_status == "production":
         raise HTTPException(400, "Cannot delete the production model; archive it first")
     if model.model_path:
-        Path(model.model_path).unlink(missing_ok=True)
+        p = Path(model.model_path)
+        if p.is_dir():
+            shutil.rmtree(str(p), ignore_errors=True)
+        else:
+            p.unlink(missing_ok=True)
     await db.delete(model)
     return {"message": "Model deleted"}
 
@@ -651,11 +657,19 @@ async def _do_train(
     class_labels = le_target.classes_.tolist()
     is_binary = len(class_labels) == 2
 
-    X = StandardScaler().fit_transform(X_df)
+    # Split BEFORE fitting scaler — prevents data leakage
+    X_raw = X_df.values.astype(float)
     try:
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+        X_train_raw, X_test_raw, y_train, y_test = train_test_split(
+            X_raw, y, test_size=0.2, random_state=42, stratify=y
+        )
     except ValueError:
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        X_train_raw, X_test_raw, y_train, y_test = train_test_split(
+            X_raw, y, test_size=0.2, random_state=42
+        )
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train_raw)   # fit on train only
+    X_test = scaler.transform(X_test_raw)          # transform test
 
     model_ids: List[str] = []
     best_f1, best_model_id = -1.0, None
@@ -710,12 +724,41 @@ async def _do_train(
 
             cm = confusion_matrix(y_test, y_pred).tolist()
             model_id = str(uuid.uuid4())
-            model_file = settings.MODELS_DIR / f"{model_id}.pkl"
-            with open(model_file, "wb") as mf:
-                pickle.dump(
-                    {"model": clf, "feature_cols": feature_cols, "label_encoder": le_target}, mf
-                )
-            model_size_mb = round(os.path.getsize(model_file) / 1024 / 1024, 3)
+
+            # Save full artifact bundle (model + preprocessor + metadata)
+            model_dir = Path(settings.MODELS_DIR) / model_id
+            model_dir.mkdir(parents=True, exist_ok=True)
+
+            joblib.dump(clf, model_dir / "model.pkl")
+            joblib.dump(scaler, model_dir / "preprocessor.pkl")
+            joblib.dump(le_target, model_dir / "label_encoder.pkl")
+
+            (model_dir / "feature_metadata.json").write_text(json.dumps({
+                "feature_names": feature_cols,
+                "feature_count": len(feature_cols),
+                "version": "1.0",
+            }))
+            (model_dir / "metrics.json").write_text(json.dumps({
+                "accuracy": acc, "f1": f1, "precision": prec,
+                "recall": rec, "roc_auc": roc,
+                "confusion_matrix": cm, "class_labels": class_labels,
+            }))
+            (model_dir / "training_config.json").write_text(json.dumps({
+                "algorithm": algo_name,
+                "train_samples": len(X_train),
+                "test_samples": len(X_test),
+                "target_column": target_column,
+            }))
+            (model_dir / "version.json").write_text(json.dumps({
+                "model_version": "v1.0.0",
+                "trained_at": datetime.now(timezone.utc).isoformat(),
+                "experiment_id": exp_id,
+            }))
+
+            model_size_mb = round(
+                sum(f.stat().st_size for f in model_dir.rglob("*") if f.is_file()) / 1024 / 1024,
+                3,
+            )
 
             ml_model = MLModel(
                 id=model_id,
@@ -737,7 +780,7 @@ async def _do_train(
                 feature_count=len(feature_cols),
                 training_samples=len(X_train),
                 target_column=target_column,
-                model_path=str(model_file),
+                model_path=str(model_dir),
                 feature_importance=feat_imp,
                 confusion_matrix_data={"matrix": cm, "labels": [str(c) for c in class_labels]},
                 class_labels=class_labels,

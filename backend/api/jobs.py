@@ -319,10 +319,23 @@ async def delete_job(
 async def run_ranking(
     job_id: str,
     min_score: float = Query(0.0, ge=0, le=100),
+    ranking_mode: str = Query("hybrid"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     job = await _get_job_or_404(job_id, db, current_user)
+
+    # Load production ML model artifact (if any)
+    from backend.ml.model_registry import get_production_model, load_full_artifact
+    ml_artifact = None
+    prod_model = await get_production_model(db)
+    if prod_model and prod_model.get("model_path"):
+        ml_artifact = load_full_artifact(prod_model["model_path"])
+        if ml_artifact is None and ranking_mode in ("ml", "hybrid"):
+            logger.warning("Production model artifact missing; falling back to traditional")
+            ranking_mode = "traditional"
+    elif ranking_mode in ("ml", "hybrid"):
+        ranking_mode = "traditional"  # no model deployed yet
 
     # Fetch all resumes for org
     q = select(Resume)
@@ -350,8 +363,25 @@ async def run_ranking(
             "cleaned_text": r.cleaned_text or "",
             "raw_text": r.raw_text or "",
             "completeness_score": r.completeness_score or 0.0,
+            # Extended fields for feature engineering
+            "projects": r.projects or [],
+            "certifications": r.certifications or [],
+            "languages": r.languages or [],
+            "soft_skills": r.soft_skills or [],
+            "portfolio_url": r.portfolio_url,
+            "github_url": r.github_url,
+            "education": r.education or [],
         }
         for r in resumes
+    }
+
+    job_dict = {
+        "required_skills": job.required_skills or [],
+        "preferred_skills": job.preferred_skills or [],
+        "experience_requirement": job.experience_requirement or "",
+        "education_requirement": job.education_requirement or "",
+        "cleaned_text": job.cleaned_text or "",
+        "description": job.description or "",
     }
 
     raw_results = ranking_engine.rank_candidates(
@@ -361,6 +391,9 @@ async def run_ranking(
         job_skills_preferred=job.preferred_skills or [],
         resume_data=resume_data,
         job_text=job.cleaned_text or job.raw_text or "",
+        ranking_mode=ranking_mode,
+        ml_artifact=ml_artifact,
+        job_dict=job_dict,
     )
 
     # Filter by min score
