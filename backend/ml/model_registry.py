@@ -99,6 +99,8 @@ def load_full_artifact(artifact_path: str) -> Optional[dict]:
             return None
         try:
             model = joblib.load(model_file)
+            base_model_file = path / "base_model.pkl"
+            base_model = joblib.load(base_model_file) if base_model_file.exists() else None
             preprocessor = (
                 joblib.load(path / "preprocessor.pkl")
                 if (path / "preprocessor.pkl").exists() else None
@@ -113,6 +115,7 @@ def load_full_artifact(artifact_path: str) -> Optional[dict]:
                 meta = json.loads(meta_file.read_text())
             return {
                 "model": model,
+                "base_model": base_model,   # raw (uncalibrated) — used for SHAP
                 "preprocessor": preprocessor,
                 "label_encoder": label_encoder,
                 "feature_names": meta.get("feature_names", []),

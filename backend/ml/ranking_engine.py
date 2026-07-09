@@ -279,19 +279,20 @@ class AdvancedRankingEngine:
         pos_idx = min(pos_idx, len(proba) - 1)
         ml_prob = float(np.clip(proba[pos_idx], 0.0, 1.0))
 
-        # SHAP explanations — best-effort, never block inference
+        # SHAP explanations — use base_model (uncalibrated) so TreeExplainer works
         shap_dict: Dict[str, float] = {}
         try:
             import shap as shap_lib  # optional dependency
 
+            shap_model = ml_artifact.get("base_model") or model
             feature_names = (
                 ml_artifact.get("feature_names")
                 or ResumeFeatureExtractor.FEATURE_NAMES
             )
             raw_features = features.reshape(1, -1)
 
-            if hasattr(model, "feature_importances_"):
-                explainer = shap_lib.TreeExplainer(model)
+            if hasattr(shap_model, "feature_importances_"):
+                explainer = shap_lib.TreeExplainer(shap_model)
                 shap_vals = explainer.shap_values(raw_features)
                 if isinstance(shap_vals, list):
                     vals = shap_vals[pos_idx][0]
@@ -301,9 +302,9 @@ class AdvancedRankingEngine:
                     name: round(float(v), 4)
                     for name, v in zip(feature_names, vals)
                 }
-            elif hasattr(model, "coef_"):
+            elif hasattr(shap_model, "coef_"):
                 explainer = shap_lib.LinearExplainer(
-                    model,
+                    shap_model,
                     masker=shap_lib.maskers.Independent(raw_features),
                 )
                 shap_vals = explainer.shap_values(raw_features)

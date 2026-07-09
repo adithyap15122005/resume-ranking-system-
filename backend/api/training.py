@@ -623,11 +623,12 @@ async def _do_train(
     user_id: str, org_id: Optional[str], db: AsyncSession,
 ) -> None:
     import pandas as pd
+    from sklearn.calibration import CalibratedClassifierCV
     from sklearn.metrics import (
-        accuracy_score, confusion_matrix, f1_score,
+        accuracy_score, average_precision_score, confusion_matrix, f1_score,
         precision_score, recall_score, roc_auc_score,
     )
-    from sklearn.model_selection import train_test_split
+    from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
     from sklearn.preprocessing import LabelEncoder, StandardScaler
 
     result = await db.execute(select(TrainingExperiment).where(TrainingExperiment.id == exp_id))
@@ -640,24 +641,47 @@ async def _do_train(
 
     df = pd.read_excel(file_path) if file_path.endswith(".xlsx") else pd.read_csv(file_path)
     df = df.drop_duplicates()
-    feature_cols = feature_columns or [c for c in df.columns if c != target_column]
+
+    # ── Validate ──────────────────────────────────────────────────────────────
     if target_column not in df.columns:
         raise ValueError(f"Target column {target_column!r} not found in dataset")
+    if len(df) < 20:
+        raise ValueError(f"Dataset too small ({len(df)} rows); need at least 20")
 
-    X_df = df[feature_cols].copy()
+    # ── Hiring-dataset auto-detection ─────────────────────────────────────────
+    HIRING_COLS = {"resume_text", "job_description"}
+    is_hiring_dataset = HIRING_COLS.issubset(set(df.columns))
+
+    if is_hiring_dataset:
+        from backend.ml.feature_engineering import ResumeFeatureExtractor
+        extractor = ResumeFeatureExtractor()
+        logger.info("Experiment %s: detected hiring dataset — auto-extracting %d features",
+                    exp_id, len(extractor.FEATURE_NAMES))
+        X_raw_list = [extractor.extract_from_dataframe_row(row.to_dict()) for _, row in df.iterrows()]
+        import pandas as _pd
+        X_df = _pd.DataFrame(X_raw_list, columns=extractor.FEATURE_NAMES)
+        feature_cols = list(extractor.FEATURE_NAMES)
+        feature_version = extractor.VERSION
+    else:
+        feature_cols = feature_columns or [c for c in df.columns if c != target_column]
+        X_df = df[feature_cols].copy()
+        for col in X_df.columns:
+            if X_df[col].dtype.kind in "iufb":
+                X_df[col] = X_df[col].fillna(X_df[col].median())
+            else:
+                X_df[col] = LabelEncoder().fit_transform(X_df[col].fillna("unknown").astype(str))
+        feature_version = "1.0"
+
     y_raw = df[target_column].copy()
-    for col in X_df.columns:
-        if X_df[col].dtype.kind in "iufb":
-            X_df[col] = X_df[col].fillna(X_df[col].median())
-        else:
-            X_df[col] = LabelEncoder().fit_transform(X_df[col].fillna("unknown").astype(str))
-
     le_target = LabelEncoder()
     y = le_target.fit_transform(y_raw.fillna("unknown").astype(str))
     class_labels = le_target.classes_.tolist()
     is_binary = len(class_labels) == 2
 
-    # Split BEFORE fitting scaler — prevents data leakage
+    if len(np.unique(y)) < 2:
+        raise ValueError("Target column must have at least 2 distinct classes")
+
+    # ── Split (stratified) — prevents data leakage ────────────────────────────
     X_raw = X_df.values.astype(float)
     try:
         X_train_raw, X_test_raw, y_train, y_test = train_test_split(
@@ -667,9 +691,23 @@ async def _do_train(
         X_train_raw, X_test_raw, y_train, y_test = train_test_split(
             X_raw, y, test_size=0.2, random_state=42
         )
+
     scaler = StandardScaler()
     X_train = scaler.fit_transform(X_train_raw)   # fit on train only
-    X_test = scaler.transform(X_test_raw)          # transform test
+    X_test = scaler.transform(X_test_raw)
+
+    # ── SMOTE (class-imbalance handling) ──────────────────────────────────────
+    smote_applied = False
+    try:
+        from imblearn.over_sampling import SMOTE
+        min_class_count = int(np.bincount(y_train).min())
+        k = min(5, min_class_count - 1)
+        if k >= 1:
+            X_train, y_train = SMOTE(random_state=42, k_neighbors=k).fit_resample(X_train, y_train)
+            smote_applied = True
+            logger.info("Experiment %s: SMOTE applied (k=%d), balanced to %d samples", exp_id, k, len(y_train))
+    except Exception as smote_err:
+        logger.info("Experiment %s: SMOTE skipped (%s) — using class_weight='balanced'", exp_id, smote_err)
 
     model_ids: List[str] = []
     best_f1, best_model_id = -1.0, None
@@ -686,14 +724,45 @@ async def _do_train(
         logger.info("Experiment %s: training %s (%d/%d)", exp_id, algo_name, i + 1, len(algorithms))
         t0 = time.time()
         try:
-            clf = _build_classifier(algo_name)
-            if clf is None:
+            cw = None if smote_applied else "balanced"
+            base_clf = _build_classifier(algo_name, class_weight=cw)
+            if base_clf is None:
                 logger.warning("Skipping %s — not installed", algo_name)
                 continue
-            clf.fit(X_train, y_train)
+
+            # ── 5-fold stratified cross-validation ───────────────────────────
+            cv_mean, cv_std = 0.0, 0.0
+            try:
+                cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+                cv_probe = _build_classifier(algo_name, class_weight=cw)
+                cv_scores = cross_val_score(cv_probe, X_train, y_train, cv=cv,
+                                            scoring="f1_weighted", n_jobs=-1)
+                cv_mean = float(cv_scores.mean())
+                cv_std = float(cv_scores.std())
+                logger.info("  %s CV F1: %.3f ± %.3f", algo_name, cv_mean, cv_std)
+            except Exception as cv_err:
+                logger.warning("  %s CV failed: %s", algo_name, cv_err)
+
+            # ── Fit base model (for SHAP) ─────────────────────────────────────
+            base_clf.fit(X_train, y_train)
+
+            # ── Calibrate probabilities ───────────────────────────────────────
+            min_class_train = int(np.bincount(y_train).min())
+            calib_folds = min(3, min_class_train)
+            if calib_folds >= 2:
+                try:
+                    cal_probe = _build_classifier(algo_name, class_weight=cw)
+                    cal_clf = CalibratedClassifierCV(cal_probe, cv=calib_folds, method="isotonic")
+                    cal_clf.fit(X_train, y_train)
+                except Exception as cal_err:
+                    logger.warning("  %s calibration failed: %s — using uncalibrated", algo_name, cal_err)
+                    cal_clf = base_clf
+            else:
+                cal_clf = base_clf
+
             t_train = time.time() - t0
             t_inf0 = time.time()
-            y_pred = clf.predict(X_test)
+            y_pred = cal_clf.predict(X_test)
             t_inf = (time.time() - t_inf0) / max(len(X_test), 1) * 1000
 
             avg = "binary" if is_binary else "weighted"
@@ -701,46 +770,55 @@ async def _do_train(
             prec = float(precision_score(y_test, y_pred, average=avg, zero_division=0))
             rec = float(recall_score(y_test, y_pred, average=avg, zero_division=0))
             f1 = float(f1_score(y_test, y_pred, average=avg, zero_division=0))
-            roc = 0.0
+            roc, pr_auc = 0.0, 0.0
             try:
-                if hasattr(clf, "predict_proba"):
-                    proba = clf.predict_proba(X_test)
+                if hasattr(cal_clf, "predict_proba"):
+                    proba = cal_clf.predict_proba(X_test)
                     if is_binary:
                         roc = float(roc_auc_score(y_test, proba[:, 1]))
+                        pr_auc = float(average_precision_score(y_test, proba[:, 1]))
                     else:
                         roc = float(roc_auc_score(y_test, proba, multi_class="ovr", average="weighted"))
             except Exception:
                 pass
 
+            # Feature importance from base_clf (not calibrated wrapper)
             feat_imp: Dict[str, float] = {}
-            if hasattr(clf, "feature_importances_"):
+            if hasattr(base_clf, "feature_importances_"):
                 feat_imp = {
                     feature_cols[j]: round(float(v), 5)
-                    for j, v in enumerate(clf.feature_importances_)
+                    for j, v in enumerate(base_clf.feature_importances_)
                 }
-            elif hasattr(clf, "coef_"):
-                coefs = np.abs(clf.coef_).mean(axis=0) if clf.coef_.ndim > 1 else np.abs(clf.coef_[0])
+            elif hasattr(base_clf, "coef_"):
+                coefs = np.abs(base_clf.coef_).mean(axis=0) if base_clf.coef_.ndim > 1 else np.abs(base_clf.coef_[0])
                 feat_imp = {feature_cols[j]: round(float(v), 5) for j, v in enumerate(coefs)}
 
             cm = confusion_matrix(y_test, y_pred).tolist()
             model_id = str(uuid.uuid4())
 
-            # Save full artifact bundle (model + preprocessor + metadata)
+            # ── Save artifact bundle ──────────────────────────────────────────
             model_dir = Path(settings.MODELS_DIR) / model_id
             model_dir.mkdir(parents=True, exist_ok=True)
 
-            joblib.dump(clf, model_dir / "model.pkl")
+            joblib.dump(cal_clf, model_dir / "model.pkl")       # calibrated — for inference
+            joblib.dump(base_clf, model_dir / "base_model.pkl") # raw — for SHAP
             joblib.dump(scaler, model_dir / "preprocessor.pkl")
             joblib.dump(le_target, model_dir / "label_encoder.pkl")
 
             (model_dir / "feature_metadata.json").write_text(json.dumps({
                 "feature_names": feature_cols,
                 "feature_count": len(feature_cols),
-                "version": "1.0",
+                "version": feature_version,
+                "smote_applied": smote_applied,
+                "cv_f1_mean": round(cv_mean, 4),
+                "cv_f1_std": round(cv_std, 4),
+                "pr_auc": round(pr_auc, 4),
+                "is_hiring_dataset": is_hiring_dataset,
             }))
             (model_dir / "metrics.json").write_text(json.dumps({
                 "accuracy": acc, "f1": f1, "precision": prec,
-                "recall": rec, "roc_auc": roc,
+                "recall": rec, "roc_auc": roc, "pr_auc": pr_auc,
+                "cv_f1_mean": cv_mean, "cv_f1_std": cv_std,
                 "confusion_matrix": cm, "class_labels": class_labels,
             }))
             (model_dir / "training_config.json").write_text(json.dumps({
@@ -748,9 +826,11 @@ async def _do_train(
                 "train_samples": len(X_train),
                 "test_samples": len(X_test),
                 "target_column": target_column,
+                "smote_applied": smote_applied,
+                "calibrated": cal_clf is not base_clf,
             }))
             (model_dir / "version.json").write_text(json.dumps({
-                "model_version": "v1.0.0",
+                "model_version": "v2.0.0",
                 "trained_at": datetime.now(timezone.utc).isoformat(),
                 "experiment_id": exp_id,
             }))
@@ -763,7 +843,7 @@ async def _do_train(
             ml_model = MLModel(
                 id=model_id,
                 name=f"{algo_name} — {exp_id[:8]}",
-                version="v1.0.0",
+                version="v2.0.0",
                 algorithm=algo_name,
                 status="trained",
                 deployment_status="experimental",
@@ -795,7 +875,8 @@ async def _do_train(
             if f1 > best_f1:
                 best_f1 = f1
                 best_model_id = model_id
-            logger.info("  %s → acc=%.3f f1=%.3f roc=%.3f", algo_name, acc, f1, roc)
+            logger.info("  %s → acc=%.3f f1=%.3f roc=%.3f pr_auc=%.3f cv=%.3f±%.3f",
+                        algo_name, acc, f1, roc, pr_auc, cv_mean, cv_std)
         except Exception as ae:
             logger.warning("  %s failed: %s", algo_name, ae)
             continue
@@ -814,35 +895,48 @@ async def _do_train(
     logger.info("Experiment %s complete. Best: %s F1=%.3f", exp_id, best_model_id, best_f1)
 
 
-def _build_classifier(algo_name: str):
+def _build_classifier(algo_name: str, class_weight: Optional[str] = None):
+    """Build a fresh (unfitted) classifier. class_weight='balanced' when SMOTE not applied."""
+    cw = class_weight  # shorthand
     try:
         if algo_name == "Logistic Regression":
             from sklearn.linear_model import LogisticRegression
-            return LogisticRegression(max_iter=500, random_state=42)
+            return LogisticRegression(max_iter=500, random_state=42,
+                                      class_weight=cw or "balanced")
         if algo_name == "Random Forest":
             from sklearn.ensemble import RandomForestClassifier
-            return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+            return RandomForestClassifier(n_estimators=150, random_state=42,
+                                          n_jobs=-1, class_weight=cw)
         if algo_name == "Extra Trees":
             from sklearn.ensemble import ExtraTreesClassifier
-            return ExtraTreesClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+            return ExtraTreesClassifier(n_estimators=150, random_state=42,
+                                        n_jobs=-1, class_weight=cw)
         if algo_name == "Gradient Boosting":
             from sklearn.ensemble import GradientBoostingClassifier
-            return GradientBoostingClassifier(n_estimators=100, random_state=42)
+            return GradientBoostingClassifier(n_estimators=150, random_state=42,
+                                              subsample=0.8)
         if algo_name == "SVM":
             from sklearn.svm import SVC
-            return SVC(probability=True, random_state=42, max_iter=500)
+            return SVC(probability=True, random_state=42, max_iter=1000,
+                       class_weight=cw)
         if algo_name == "Neural Network":
             from sklearn.neural_network import MLPClassifier
-            return MLPClassifier(hidden_layer_sizes=(128, 64), max_iter=300, random_state=42)
+            return MLPClassifier(hidden_layer_sizes=(128, 64, 32),
+                                 max_iter=400, random_state=42, early_stopping=True)
         if algo_name == "XGBoost":
             from xgboost import XGBClassifier
-            return XGBClassifier(n_estimators=100, random_state=42, eval_metric="logloss", verbosity=0)
+            scale_pos = None if (cw is None or cw != "balanced") else 1
+            return XGBClassifier(n_estimators=150, random_state=42,
+                                 eval_metric="logloss", verbosity=0,
+                                 scale_pos_weight=scale_pos)
         if algo_name == "LightGBM":
             from lightgbm import LGBMClassifier
-            return LGBMClassifier(n_estimators=100, random_state=42, verbose=-1)
+            return LGBMClassifier(n_estimators=150, random_state=42,
+                                  verbose=-1, class_weight=cw)
         if algo_name == "CatBoost":
             from catboost import CatBoostClassifier
-            return CatBoostClassifier(iterations=100, random_state=42, verbose=0)
+            return CatBoostClassifier(iterations=150, random_state=42, verbose=0,
+                                      auto_class_weights="Balanced" if cw else None)
     except ImportError:
         return None
     return None
