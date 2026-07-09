@@ -267,7 +267,8 @@ class ResumeFeatureExtractor:
         candidate_skills = {s.lower().strip() for s in (resume_dict.get("skills") or []) if s}
         req_set = set(required_skills)
         pref_set = set(preferred_skills)
-        skill_match_req = len(candidate_skills & req_set) / len(req_set) if req_set else 1.0
+        # 0.5 neutral when no skills specified (not 1.0 — that inflates wrong-role scores)
+        skill_match_req = len(candidate_skills & req_set) / len(req_set) if req_set else 0.5
         skill_match_pref = len(candidate_skills & pref_set) / len(pref_set) if pref_set else 0.0
 
         # Experience

@@ -54,15 +54,19 @@ def _safe_float(val, default: float = 0.0) -> float:
 class AdvancedRankingEngine:
     """
     Hybrid ranking engine combining:
-    - SBERT semantic similarity  → 50 %
-    - Skill overlap score        → 30 %
+    - Skill overlap score        → 45 %  (dominant — role fit is skill-driven)
+    - SBERT semantic similarity  → 35 %
     - Experience match           → 20 %
-    with SHAP-style contribution explanations.
+    with SHAP-style contribution explanations and a role-mismatch gate.
     """
 
-    EMBEDDING_WEIGHT = 0.50
-    SKILL_WEIGHT = 0.30
+    EMBEDDING_WEIGHT = 0.35
+    SKILL_WEIGHT = 0.45
     EXPERIENCE_WEIGHT = 0.20
+
+    # If fewer than this fraction of required skills match, cap final score at SKILL_GATE_CAP
+    SKILL_GATE_THRESHOLD = 0.25
+    SKILL_GATE_CAP = 0.48
 
     # Thresholds for the 0–100 composite score
     THRESHOLDS = {
@@ -96,7 +100,8 @@ class AdvancedRankingEngine:
         preferred_set = {s.lower().strip() for s in preferred_skills if s}
 
         if not required_set:
-            return 1.0
+            # Neutral 0.5 — no requirements specified, don't gift full credit
+            return 0.5
 
         req_coverage = len(resume_set & required_set) / len(required_set)
         if preferred_set:
@@ -369,6 +374,13 @@ class AdvancedRankingEngine:
                 + experience_score * self.EXPERIENCE_WEIGHT
             )
             traditional_01 = round(min(max(_safe_float(traditional_01), 0.0), 1.0), 4)
+
+            # ── Role-mismatch gate ────────────────────────────────────────────
+            # When required skills are specified but fewer than 25% match,
+            # the candidate is a wrong-role fit — cap their score regardless
+            # of semantic similarity (e.g. ML Engineer → DevOps job).
+            if job_skills_required and skill_score < self.SKILL_GATE_THRESHOLD:
+                traditional_01 = min(traditional_01, self.SKILL_GATE_CAP)
 
             # ── ML / Hybrid scoring ───────────────────────────────────────────
             ml_prob = traditional_01   # fallback value
