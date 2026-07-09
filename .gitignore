@@ -35,6 +35,7 @@ logs/
 
 # Trained models
 trained/
+models/
 
 # Uploaded files (keep directory, not contents)
 uploads/resumes/*
